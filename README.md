@@ -8,7 +8,7 @@
 
 The NEXRAD Level II Radar Data Processing Pipeline is a self-hosted, high-performance backend for ingesting and processing NEXRAD Level II radar data. It is designed primarily for hobbyist and experimental radar applications, with a strong focus on performance, configurability, and simplicity of deployment.
 
-The pipeline fetches raw radar data directly from :contentReference[oaicite:0]{index=0} public S3 buckets, handles decompression and decoding, and produces processed radar outputs suitable for visualization or further analysis. At present, the software supports **Archive2** data only.
+The pipeline fetches raw radar data directly from public AWS buckets, handles decompression and decoding, and produces processed radar outputs suitable for visualization or further analysis. At present, the software supports **Archive2** data only.
 
 This project was created to reduce the barrier to entry for radar experimentation. Building a functional NEXRAD processing backend requires navigating scattered documentation, legacy formats, and complex implementation details. This pipeline exists to save others that time by providing a working, reusable foundation for radar-based projects.
 

@@ -173,5 +173,5 @@ target_link_libraries(nexrad_pipeline PRIVATE
 
 if(ENABLE_TESTING)
     enable_testing()
-    add_subdirectory(tests)
+    add_subdirectory(test/code_tests)
 endif()

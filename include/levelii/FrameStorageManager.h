@@ -21,6 +21,7 @@
 #include <chrono>
 #include <shared_mutex>
 #include <queue>
+#include <list>
 #include <thread>
 #include <atomic>
 #include <condition_variable>
@@ -88,7 +89,7 @@ public:
      * @brief Queue a frame for asynchronous write to disk.
      * @param task Description of the data and metadata to be written.
      */
-    void enqueue_async_write(const AsyncWriteTask& task);
+    void enqueue_async_write(AsyncWriteTask&& task);
     
     /**
      * @brief Stop the async storage thread and wait for pending tasks to complete.
@@ -200,11 +201,17 @@ public:
     // Statistics
     size_t get_total_disk_usage() const;
     int get_frame_count() const;
+    size_t num_pending_tasks() const {
+        std::lock_guard<std::mutex> lock(write_queue_mutex_);
+        return write_queue_.size();
+    }
     
 private:
     std::string base_path_;
     mutable std::shared_mutex index_mutex_;
     mutable std::unordered_map<std::string, json> index_cache_;
+    mutable std::list<std::string> index_lru_list_;
+    mutable std::unordered_map<std::string, std::list<std::string>::iterator> index_lru_map_;
 
     // Incremental statistics tracking
     mutable std::mutex stats_mutex_;
@@ -215,9 +222,12 @@ private:
     std::queue<AsyncWriteTask> write_queue_;
     mutable std::mutex write_queue_mutex_;
     std::condition_variable write_queue_cv_;
+    std::condition_variable write_queue_full_cv_;
     std::thread storage_thread_;
     std::atomic<bool> async_storage_running_{false};
     std::atomic<bool> async_storage_stop_{false};
+    
+    const size_t MAX_WRITE_QUEUE_SIZE = 50;
     
     void async_storage_loop();
     void process_write_task(const AsyncWriteTask& task);

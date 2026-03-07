@@ -4,6 +4,7 @@
 #include <vector>
 #include <unordered_map>
 #include <tuple>
+#include <memory>
 #include <nlohmann/json.hpp>
 
 using json = nlohmann::json;
@@ -64,7 +65,7 @@ struct RadarFrame {
     float first_gate_meters;  // Distance to first gate in meters
     
     // Per-sweep metadata
-    std::unordered_map<int, int> sweep_ray_counts;  // elevation_key -> number of rays
+    std::shared_ptr<std::unordered_map<int, int>> elevation_ray_counts;  // elevation_key -> number of rays
     
     // Velocity dealiasing metadata
     std::unordered_map<int, float> nyquist_velocity;  // elevation_key -> Nyquist velocity (m/s)
@@ -89,6 +90,15 @@ struct RadarFrame {
                    radar_height_asl_meters(0.0f), elevation_deg(0.0f), 
                    gate_spacing_meters(0.0f), range_spacing_meters(0.0f), first_gate_meters(0.0f),
                    has_volumetric_data(false) {}
+    
+    void clear_data() {
+        std::vector<Sweep>().swap(sweeps);
+        std::vector<float>().swap(volumetric_3d);
+        std::vector<float>().swap(available_tilts);
+        elevation_ray_counts.reset();
+        nyquist_velocity.clear();
+        has_volumetric_data = false;
+    }
     
     std::string encode_volumetric_3d_binary() const;
 };

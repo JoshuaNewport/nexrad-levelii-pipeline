@@ -80,6 +80,7 @@ public:
         auto parse_start = std::chrono::high_resolution_clock::now();
         std::unordered_map<std::string, std::unique_ptr<RadarFrame>> frames;
         std::unordered_map<std::string, uint8_t> product_to_moment;
+        nexrad::MessageSegmenter segmenter;
         
         for (const auto& pt : product_types) {
             auto frame = std::make_unique<RadarFrame>();
@@ -92,6 +93,7 @@ public:
         
         if (data.size() < sizeof(nexrad::VolumeHeader)) {
             if (VERBOSE_LOGGING) std::cerr << "❌ File too small for Volume Header" << std::endl;
+            segmenter.clear();
             return frames;
         }
         
@@ -117,6 +119,7 @@ public:
         std::vector<uint8_t>& decompressed_data = decompressed_out ? *decompressed_out : local_decompressed;
         
         if (!RadarDecompression::auto_decompress(data, decompressed_data)) {
+            segmenter.clear();
             return frames;
         }
         
@@ -126,6 +129,7 @@ public:
         }
         
         if (parse_size < sizeof(nexrad::VolumeHeader)) {
+            segmenter.clear();
             return frames;
         }
         
@@ -133,13 +137,12 @@ public:
         int message_count = 0;
         int radial_count = 0;
         float min_elevation = 999.0f;
-        std::unordered_map<int, int> elevation_ray_counts;
+        auto elevation_ray_counts = std::make_shared<std::unordered_map<int, int>>();
         
         int current_sweep_idx = -1;
         uint8_t current_elev_num = 0xFF;
         float current_sweep_elevation = -99.0f;
         
-        nexrad::MessageSegmenter segmenter;
         bool is_archive2 = false;
         if (parse_size >= 24 && (std::memcmp(parse_data, "ARCHIVE2", 8) == 0 || 
                                  std::memcmp(parse_data, "AR2V", 4) == 0)) {
@@ -243,48 +246,48 @@ public:
                         sweep.elevation_deg = elevation;
                         // Reserve reasonable initial capacity to reduce reallocations
                         // Typical high-res sweep has ~720 radials * 1800 gates / 1 (DOWNSAMPLE)
-                        // but many gates are empty. 1M floats is ~4MB.
-                        sweep.bins.reserve(1000000); 
-                        pair.second->sweeps.push_back(std::move(sweep));
-                    }
+                        // but many gates are empty. 500k floats is ~2MB.
+                        sweep.bins.reserve(100000); 
+                    pair.second->sweeps.push_back(std::move(sweep));
                 }
+            }
 
-                if (current_sweep_idx >= 0) {
-                    int active_key = RadarFrame::get_tilt_key(current_sweep_elevation);
-                    elevation_ray_counts[active_key]++;
+            if (current_sweep_idx >= 0) {
+                int active_key = RadarFrame::get_tilt_key(current_sweep_elevation);
+                (*elevation_ray_counts)[active_key]++;
+                
+                for (auto& pair : frames) {
+                    auto& frame = *pair.second;
+                    frame.sweeps[current_sweep_idx].ray_count++;
                     
-                    for (auto& pair : frames) {
-                        auto& frame = *pair.second;
-                        frame.sweeps[current_sweep_idx].ray_count++;
-                        
-                        if (product_to_moment[pair.first] == 1 && payload_size >= 46) {
-                            uint16_t unam_rng_raw = read_be<uint16_t>(payload_ptr + 26);
-                            if (unam_rng_raw > 0) {
-                                frame.unambiguous_range_meters = static_cast<float>(unam_rng_raw) * 100.0f;
-                                frame.max_range_meters = std::max(frame.max_range_meters, frame.unambiguous_range_meters);
-                            }
-                            uint16_t nyquist_raw = read_be<uint16_t>(payload_ptr + 28);
-                            if (nyquist_raw > 0) {
-                                float nyquist = static_cast<float>(nyquist_raw) * 0.1f;
-                                frame.nyquist_velocity[active_key] = nyquist;
-                                frame.sweeps[current_sweep_idx].nyquist_velocity = nyquist;
-                            }
+                    if (product_to_moment[pair.first] == 1 && payload_size >= 46) {
+                        uint16_t unam_rng_raw = read_be<uint16_t>(payload_ptr + 26);
+                        if (unam_rng_raw > 0) {
+                            frame.unambiguous_range_meters = static_cast<float>(unam_rng_raw) * 100.0f;
+                            frame.max_range_meters = std::max(frame.max_range_meters, frame.unambiguous_range_meters);
+                        }
+                        uint16_t nyquist_raw = read_be<uint16_t>(payload_ptr + 28);
+                        if (nyquist_raw > 0) {
+                            float nyquist = static_cast<float>(nyquist_raw) * 0.1f;
+                            frame.nyquist_velocity[active_key] = nyquist;
+                            frame.sweeps[current_sweep_idx].nyquist_velocity = nyquist;
+                        }
 
-                            uint16_t num_gates = read_be<uint16_t>(payload_ptr + 24);
-                            float first_gate_m = static_cast<float>(read_be<uint16_t>(payload_ptr + 20));
-                            float gate_size_m = static_cast<float>(read_be<uint16_t>(payload_ptr + 22));
-                            
-                            if (num_gates > 0 && payload_size >= static_cast<size_t>(46 + num_gates)) {
-                                const uint8_t* gate_data = payload_ptr + 46;
-                                if (frame.ngates == 0 && num_gates > 10) {
-                                    frame.ngates = (num_gates + DOWNSAMPLE_GATES - 1) / DOWNSAMPLE_GATES;
-                                    frame.gate_spacing_meters = gate_size_m * DOWNSAMPLE_GATES;
-                                    frame.range_spacing_meters = gate_size_m * DOWNSAMPLE_GATES;
-                                    frame.first_gate_meters = first_gate_m;
-                                }
-                                if (frame.sweeps[current_sweep_idx].bins.empty()) {
-                                    frame.sweeps[current_sweep_idx].bins.reserve(num_gates * 3);
-                                }
+                        uint16_t num_gates = read_be<uint16_t>(payload_ptr + 24);
+                        float first_gate_m = static_cast<float>(read_be<uint16_t>(payload_ptr + 20));
+                        float gate_size_m = static_cast<float>(read_be<uint16_t>(payload_ptr + 22));
+                        
+                        if (num_gates > 0 && payload_size >= static_cast<size_t>(46 + num_gates)) {
+                            const uint8_t* gate_data = payload_ptr + 46;
+                            if (frame.ngates == 0 && num_gates > 10) {
+                                frame.ngates = (num_gates + DOWNSAMPLE_GATES - 1) / DOWNSAMPLE_GATES;
+                                frame.gate_spacing_meters = gate_size_m * DOWNSAMPLE_GATES;
+                                frame.range_spacing_meters = gate_size_m * DOWNSAMPLE_GATES;
+                                frame.first_gate_meters = first_gate_m;
+                            }
+                            if (frame.sweeps[current_sweep_idx].bins.empty()) {
+                                frame.sweeps[current_sweep_idx].bins.reserve(num_gates * 3);
+                            }
                                 for (uint16_t g = 0; g < num_gates; g += DOWNSAMPLE_GATES) {
                                     uint8_t raw_value = gate_data[g];
                                     if (raw_value <= 1) continue;
@@ -334,7 +337,9 @@ public:
                         sweep.elevation_num = elev_num;
                         sweep.elevation_deg = elevation;
                         // Reserve reasonable initial capacity to reduce reallocations
-                        sweep.bins.reserve(1000000); 
+                        // Typical high-res sweep has ~720 radials * 1800 gates / 1 (DOWNSAMPLE)
+                        // but many gates are empty. 100k floats is ~400KB.
+                        sweep.bins.reserve(100000); 
                         pair.second->sweeps.push_back(std::move(sweep));
                     }
                 }
@@ -342,7 +347,7 @@ public:
                 if (current_sweep_idx >= 0) {
                     if (elevation < min_elevation) min_elevation = elevation;
                     int active_key = RadarFrame::get_tilt_key(current_sweep_elevation);
-                    elevation_ray_counts[active_key]++;
+                    (*elevation_ray_counts)[active_key]++;
                     
                     for (auto& pair : frames) pair.second->sweeps[current_sweep_idx].ray_count++;
 
@@ -455,7 +460,7 @@ public:
             if (frame.unambiguous_range_meters <= 0) frame.unambiguous_range_meters = 230000.0f;
             frame.nsweeps = frame.sweeps.size();
             frame.nrays = radial_count;
-            frame.sweep_ray_counts = elevation_ray_counts;
+            frame.elevation_ray_counts = elevation_ray_counts;
             if (!frame.sweeps.empty()) frame.elevation_deg = frame.sweeps[0].elevation_deg;
             else frame.elevation_deg = min_elevation;
             
@@ -465,6 +470,10 @@ public:
             }
         }
         segmenter.clear();
+        if (!decompressed_out) {
+            local_decompressed.clear();
+            local_decompressed.shrink_to_fit();
+        }
         return frames;
     }
 };

@@ -23,9 +23,9 @@ bool decompress_bz2_raw(const uint8_t* data, size_t size,
     if (size == 0) return false;
     
     // OPTIMIZATION 1: Better initial size estimate for NEXRAD data
-    // Typical NEXRAD bz2 compression ratio is ~10-12x
-    // Pre-allocate 12x to minimize reallocations
-    decompressed.resize(size * 12);
+    // Typical NEXRAD bz2 compression ratio is ~8-10x
+    // Pre-allocate 8x to minimize reallocations
+    decompressed.resize(size * 8);
     
     bz_stream stream;
     stream.bzalloc = nullptr;
@@ -82,8 +82,8 @@ bool decompress_ldm(const std::vector<uint8_t>& data,
         return false;
     }
     
-    // Pre-allocate with better estimate (12x typical compression ratio)
-    decompressed.reserve(data.size() * 12 + VOLUME_HEADER_SIZE);
+    // Pre-allocate with better estimate (8x typical compression ratio)
+    decompressed.reserve(data.size() * 8 + VOLUME_HEADER_SIZE);
     
     // 1. Copy Volume Header (24 bytes)
     decompressed.insert(decompressed.end(), data.begin(), data.begin() + VOLUME_HEADER_SIZE);
@@ -118,10 +118,10 @@ bool decompress_ldm(const std::vector<uint8_t>& data,
         stream.avail_in = block_size;
         stream.next_in = const_cast<char*>(reinterpret_cast<const char*>(data.data() + offset));
         
-        // Initial output buffer size (12x estimate)
+        // Initial output buffer size (8x estimate)
         size_t out_offset = decompressed.size();
-        decompressed.resize(out_offset + block_size * 12);
-        stream.avail_out = block_size * 12;
+        decompressed.resize(out_offset + block_size * 8);
+        stream.avail_out = block_size * 8;
         stream.next_out = reinterpret_cast<char*>(decompressed.data() + out_offset);
         
         int ret = BZ2_bzDecompressInit(&stream, 0, 0);

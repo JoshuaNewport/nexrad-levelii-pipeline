@@ -485,21 +485,24 @@ void BackgroundFrameFetcher::process_discovery_batch(const DiscoveryBatch& batch
                         float tilt = sorted_tilts[tilt_idx];
                         if (should_stop_.load()) break;
 
-                        std::vector<float> tilt_data;
+                        // Check if this tilt has any sweeps before proceeding
+                        bool has_sweeps = false;
                         for (const auto& sweep : frame->sweeps) {
                             if (std::abs(sweep.elevation_deg - tilt) < 0.01f) {
-                                tilt_data.insert(tilt_data.end(), sweep.bins.begin(), sweep.bins.end());
+                                has_sweeps = true;
+                                break;
                             }
                         }
-                        
-                        if (tilt_data.empty()) continue;
+                        if (!has_sweeps) continue;
 
                         uint16_t num_rays = 360;
                         float resolution_factor = 1.0f;
-                        auto ray_count_it = frame->sweep_ray_counts.find(RadarFrame::get_tilt_key(tilt));
-                        if (ray_count_it != frame->sweep_ray_counts.end() && ray_count_it->second > 400) {
-                            num_rays = 720;
-                            resolution_factor = 2.0f;
+                        if (frame->elevation_ray_counts) {
+                            auto ray_count_it = frame->elevation_ray_counts->find(RadarFrame::get_tilt_key(tilt));
+                            if (ray_count_it != frame->elevation_ray_counts->end() && ray_count_it->second > 400) {
+                                num_rays = 720;
+                                resolution_factor = 2.0f;
+                            }
                         }
                         
                         ScopedBuffer grid_2d_buf(buffer_pool);
@@ -507,35 +510,39 @@ void BackgroundFrameFetcher::process_discovery_batch(const DiscoveryBatch& batch
                         grid_2d_buf->assign(static_cast<size_t>(num_rays) * vol_num_gates, 0);
                         std::vector<uint8_t>& grid_2d = *grid_2d_buf;
                         
-                        for (size_t j = 0; j + 2 < tilt_data.size(); j += 3) {
-                            float azimuth = tilt_data[j];
-                            float range = tilt_data[j+1];
-                            float value = tilt_data[j+2];
+                        for (const auto& sweep : frame->sweeps) {
+                            if (std::abs(sweep.elevation_deg - tilt) < 0.01f) {
+                                for (size_t j = 0; j + 2 < sweep.bins.size(); j += 3) {
+                                    float azimuth = sweep.bins[j];
+                                    float range = sweep.bins[j+1];
+                                    float value = sweep.bins[j+2];
 
-                            uint8_t val = quantize_value(value, params.value_min, params.value_max);
-                            if (val == 0) continue;
+                                    uint8_t val = quantize_value(value, params.value_min, params.value_max);
+                                    if (val == 0) continue;
 
-                            int gate_idx = static_cast<int>(std::floor((range - frame->first_gate_meters) / frame->gate_spacing_meters));
-                            if (gate_idx < 0 || gate_idx >= static_cast<int>(vol_num_gates)) continue;
+                                    int gate_idx = static_cast<int>(std::floor((range - frame->first_gate_meters) / frame->gate_spacing_meters));
+                                    if (gate_idx < 0 || gate_idx >= static_cast<int>(vol_num_gates)) continue;
 
-                            int ray_idx_2d = static_cast<int>(std::floor(azimuth * resolution_factor + 0.01f)) % num_rays;
-                            if (ray_idx_2d < 0) ray_idx_2d += num_rays;
-                            size_t idx_2d = static_cast<size_t>(ray_idx_2d) * vol_num_gates + gate_idx;
-                            if (idx_2d < grid_2d.size()) {
-                                grid_2d[idx_2d] = std::max(grid_2d[idx_2d], val);
-                            }
+                                    int ray_idx_2d = static_cast<int>(std::floor(azimuth * resolution_factor + 0.01f)) % num_rays;
+                                    if (ray_idx_2d < 0) ray_idx_2d += num_rays;
+                                    size_t idx_2d = static_cast<size_t>(ray_idx_2d) * vol_num_gates + gate_idx;
+                                    if (idx_2d < grid_2d.size()) {
+                                        grid_2d[idx_2d] = std::max(grid_2d[idx_2d], val);
+                                    }
 
-                            int ray_idx_3d = static_cast<int>(std::floor(azimuth * vol_res_factor + 0.01f)) % vol_num_rays;
-                            if (ray_idx_3d < 0) ray_idx_3d += vol_num_rays;
-                            size_t idx_3d = (static_cast<size_t>(tilt_idx) * vol_num_rays * vol_num_gates) + 
-                                            (static_cast<size_t>(ray_idx_3d) * vol_num_gates) + gate_idx;
-                            if (idx_3d < vol_grid.size()) {
-                                vol_grid[idx_3d] = std::max(vol_grid[idx_3d], val);
-                                if (resolution_factor < 1.5f) {
-                                    int adjacent_ray = (ray_idx_3d + 1) % vol_num_rays;
-                                    size_t adj_idx = (static_cast<size_t>(tilt_idx) * vol_num_rays * vol_num_gates) + 
-                                                     (static_cast<size_t>(adjacent_ray) * vol_num_gates) + gate_idx;
-                                    if (adj_idx < vol_grid.size()) vol_grid[adj_idx] = std::max(vol_grid[adj_idx], val);
+                                    int ray_idx_3d = static_cast<int>(std::floor(azimuth * vol_res_factor + 0.01f)) % vol_num_rays;
+                                    if (ray_idx_3d < 0) ray_idx_3d += vol_num_rays;
+                                    size_t idx_3d = (static_cast<size_t>(tilt_idx) * vol_num_rays * vol_num_gates) + 
+                                                    (static_cast<size_t>(ray_idx_3d) * vol_num_gates) + gate_idx;
+                                    if (idx_3d < vol_grid.size()) {
+                                        vol_grid[idx_3d] = std::max(vol_grid[idx_3d], val);
+                                        if (resolution_factor < 1.5f) {
+                                            int adjacent_ray = (ray_idx_3d + 1) % vol_num_rays;
+                                            size_t adj_idx = (static_cast<size_t>(tilt_idx) * vol_num_rays * vol_num_gates) + 
+                                                             (static_cast<size_t>(adjacent_ray) * vol_num_gates) + gate_idx;
+                                            if (adj_idx < vol_grid.size()) vol_grid[adj_idx] = std::max(vol_grid[adj_idx], val);
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -588,6 +595,10 @@ void BackgroundFrameFetcher::process_discovery_batch(const DiscoveryBatch& batch
                             storage_->save_volumetric_bitmask(item.station, product, item.timestamp, sorted_tilts, vol_num_rays, vol_num_gates, frame->gate_spacing_meters, frame->first_gate_meters, vol_bitmask, vol_values, frame->dualpol_meta, false);
                         }
                     }
+                    
+                    // CRITICAL: Reclaim memory from RadarFrame as soon as it's processed and saved
+                    frame->clear_data();
+                    
                 } catch (const std::exception& e) {
                     this->log_error("Exception parsing/processing " + product + " for " + item.station + ": " + e.what());
                 } catch (...) {
@@ -809,7 +820,17 @@ json BackgroundFrameFetcher::get_statistics() const {
     {
         std::lock_guard<std::mutex> lock(stats_mutex_);
         json s_stats = json::object();
-        for (const auto& [station, s] : station_stats_) {
+        
+        // Optimization: limit the number of station stats returned to avoid massive JSON responses
+        // if hundreds of stations are monitored. Sort by last_fetch_timestamp (most recent first).
+        std::vector<std::pair<std::string, StationStats>> sorted_stats(station_stats_.begin(), station_stats_.end());
+        std::sort(sorted_stats.begin(), sorted_stats.end(), [](const auto& a, const auto& b) {
+            return a.second.last_fetch_timestamp > b.second.last_fetch_timestamp;
+        });
+        
+        size_t count = 0;
+        for (const auto& [station, s] : sorted_stats) {
+            if (count++ >= 50) break; // Limit to 50 most recent
             s_stats[station] = {
                 {"frames_fetched", s.frames_fetched},
                 {"frames_failed", s.frames_failed},
@@ -819,11 +840,13 @@ json BackgroundFrameFetcher::get_statistics() const {
             };
         }
         stats["station_stats"] = s_stats;
+        stats["total_stations_tracked"] = station_stats_.size();
     }
 
     if (storage_) {
         stats["total_disk_usage_bytes"] = storage_->get_total_disk_usage();
         stats["frame_count"] = storage_->get_frame_count();
+        stats["storage_pending_tasks"] = storage_->num_pending_tasks();
     }
     return stats;
 }

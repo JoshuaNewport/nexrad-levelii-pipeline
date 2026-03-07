@@ -62,8 +62,8 @@ int main(int argc, char** argv) {
     for (float tilt : frame->available_tilts) {
         std::cout << "Tilt: " << std::fixed << std::setprecision(2) << tilt << " deg";
         int tilt_key = RadarFrame::get_tilt_key(tilt);
-        if (frame->sweep_ray_counts.count(tilt_key)) {
-            std::cout << " (" << frame->sweep_ray_counts.at(tilt_key) << " rays)";
+        if (frame->elevation_ray_counts && frame->elevation_ray_counts->count(tilt_key)) {
+            std::cout << " (" << frame->elevation_ray_counts->at(tilt_key) << " rays)";
         }
         if (frame->nyquist_velocity.count(tilt_key)) {
             std::cout << " [Nyquist: " << frame->nyquist_velocity.at(tilt_key) << " m/s]";

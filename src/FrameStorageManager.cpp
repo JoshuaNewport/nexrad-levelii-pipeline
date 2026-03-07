@@ -54,10 +54,16 @@ FrameStorageManager::~FrameStorageManager() {
     shutdown_async_storage();
 }
 
-void FrameStorageManager::enqueue_async_write(const AsyncWriteTask& task) {
+void FrameStorageManager::enqueue_async_write(AsyncWriteTask&& task) {
     {
-        std::lock_guard<std::mutex> lock(write_queue_mutex_);
-        write_queue_.push(task);
+        std::unique_lock<std::mutex> lock(write_queue_mutex_);
+        write_queue_full_cv_.wait(lock, [this]() {
+            return write_queue_.size() < MAX_WRITE_QUEUE_SIZE || async_storage_stop_.load();
+        });
+        
+        if (async_storage_stop_.load()) return;
+        
+        write_queue_.push(std::move(task));
     }
     write_queue_cv_.notify_one();
 }
@@ -70,6 +76,7 @@ void FrameStorageManager::shutdown_async_storage() {
         async_storage_stop_.store(true);
     }
     write_queue_cv_.notify_all();
+    write_queue_full_cv_.notify_all();
     
     if (storage_thread_.joinable()) {
         storage_thread_.join();
@@ -94,6 +101,7 @@ void FrameStorageManager::async_storage_loop() {
             if (!write_queue_.empty()) {
                 task = std::move(write_queue_.front());
                 write_queue_.pop();
+                write_queue_full_cv_.notify_one();
             } else {
                 continue;
             }
@@ -365,17 +373,32 @@ void FrameStorageManager::update_index(const std::string& station, const std::st
         std::string key = station + "/" + product;
         index_cache_[key] = index;
         
+        // Update LRU
+        if (index_lru_map_.count(key)) {
+            index_lru_list_.erase(index_lru_map_[key]);
+        }
+        index_lru_list_.push_front(key);
+        index_lru_map_[key] = index_lru_list_.begin();
+        
         if (index_cache_.size() > MAX_INDEX_CACHE_SIZE) {
-            auto oldest_it = index_cache_.begin();
-            index_cache_.erase(oldest_it);
+            std::string oldest_key = index_lru_list_.back();
+            index_cache_.erase(oldest_key);
+            index_lru_map_.erase(oldest_key);
+            index_lru_list_.pop_back();
         }
     } catch (...) {}
 }
 
 json FrameStorageManager::get_index(const std::string& station, const std::string& product) const {
-    std::shared_lock<std::shared_mutex> lock(index_mutex_);
+    std::unique_lock<std::shared_mutex> lock(index_mutex_);
     std::string key = station + "/" + product;
-    if (index_cache_.count(key)) return index_cache_.at(key);
+    if (index_cache_.count(key)) {
+        // Update LRU on access
+        index_lru_list_.erase(index_lru_map_[key]);
+        index_lru_list_.push_front(key);
+        index_lru_map_[key] = index_lru_list_.begin();
+        return index_cache_.at(key);
+    }
     
     std::string path = get_index_path(station, product);
     if (fs::exists(path)) {
@@ -386,7 +409,24 @@ json FrameStorageManager::get_index(const std::string& station, const std::strin
         std::vector<uint8_t> compressed(size);
         file.read(reinterpret_cast<char*>(compressed.data()), size);
         auto decompressed = ZlibUtils::gzip_decompress(compressed.data(), compressed.size());
-        return json::parse(std::string(decompressed.begin(), decompressed.end()));
+        json index = json::parse(std::string(decompressed.begin(), decompressed.end()));
+        
+        // Cache it
+        index_cache_[key] = index;
+        if (index_lru_map_.count(key)) {
+            index_lru_list_.erase(index_lru_map_[key]);
+        }
+        index_lru_list_.push_front(key);
+        index_lru_map_[key] = index_lru_list_.begin();
+        
+        if (index_cache_.size() > MAX_INDEX_CACHE_SIZE) {
+            std::string oldest_key = index_lru_list_.back();
+            index_cache_.erase(oldest_key);
+            index_lru_map_.erase(oldest_key);
+            index_lru_list_.pop_back();
+        }
+        
+        return index;
     }
     return json::object();
 }

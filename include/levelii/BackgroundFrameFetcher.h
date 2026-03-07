@@ -141,8 +141,8 @@ struct FrameFetcherConfig {
 
     // Memory and Performance Scaling
     int fetcher_thread_pool_size = 8;      // Increase to 8 for 150 stations
-    int buffer_pool_size = 64;            // More buffers for parallelism
-    size_t buffer_size = 120 * 1024 * 1024; // 120MB per buffer (for decompressed data)
+    int buffer_pool_size = 32;            // More buffers for parallelism
+    size_t buffer_size = 64 * 1024 * 1024; // 64MB per buffer (for decompressed data)
     int max_task_queue_size = 1000;       // Bound task queue to prevent memory spikes
     
     // Discovery performance

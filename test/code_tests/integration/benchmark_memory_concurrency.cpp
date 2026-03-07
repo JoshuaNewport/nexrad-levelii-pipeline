@@ -49,8 +49,8 @@ int main(int argc, char** argv) {
     // Config mirroring our optimized settings
     FrameFetcherConfig config;
     config.fetcher_thread_pool_size = 8;
-    config.buffer_pool_size = 64;
-    config.buffer_size = 120 * 1024 * 1024;
+    config.buffer_pool_size = 32;
+    config.buffer_size = 64 * 1024 * 1024;
     
     auto storage = std::make_shared<FrameStorageManager>("./test_data");
     auto buffer_pool = std::make_shared<BufferPool>(config.buffer_pool_size, config.buffer_size);
@@ -87,6 +87,12 @@ int main(int argc, char** argv) {
                     if (decomp_buf.valid()) {
                         auto frames = parse_nexrad_level2_multi(*raw_buf, station, timestamp, {"reflectivity"}, decomp_buf.get(), false);
                         storage->update_index(station, "reflectivity");
+                        
+                        // Explicitly clear memory from frames
+                        for (auto& pair : frames) {
+                            if (pair.second) pair.second->clear_data();
+                        }
+                        frames.clear();
                     }
                 }
                 

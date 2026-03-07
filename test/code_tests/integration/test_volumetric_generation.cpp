@@ -20,6 +20,7 @@ int main() {
     frame->nrays = 360;
     frame->gate_spacing_meters = 250.0f;
     frame->first_gate_meters = 2125.0f;
+    frame->elevation_ray_counts = std::make_shared<std::unordered_map<int, int>>();
 
     for (int i = 0; i < 3; ++i) {
         RadarFrame::Sweep sweep;
@@ -29,7 +30,7 @@ int main() {
         // Simplified mock data
         sweep.bins.resize(360 * 100 * 3); 
         frame->sweeps.push_back(sweep);
-        frame->sweep_ray_counts[RadarFrame::get_tilt_key(sweep.elevation_deg)] = 360;
+        (*frame->elevation_ray_counts)[RadarFrame::get_tilt_key(sweep.elevation_deg)] = 360;
     }
 
     std::cout << "Testing VolumetricGenerator::generate_volumetric_data... ";

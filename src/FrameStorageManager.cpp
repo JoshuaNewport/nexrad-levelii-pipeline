@@ -153,7 +153,7 @@ std::string FrameStorageManager::get_index_path(const std::string& station, cons
     return oss.str();
 }
 
-bool FrameStorageManager::save_frame_bitmask(const std::string& station, const std::string& product, const std::string& timestamp, float tilt, uint16_t num_rays, uint16_t num_gates, float gate_spacing, float first_gate, const std::vector<uint8_t>& bitmask, const std::vector<uint8_t>& values, const RadarFrame::DualPolMetadata& dualpol_meta) {
+bool FrameStorageManager::save_frame_bitmask(const std::string& station, const std::string& product, const std::string& timestamp, float tilt, uint16_t num_rays, uint16_t num_gates, float gate_spacing, float first_gate, const std::vector<uint8_t>& bitmask, const std::vector<uint8_t>& values, const RadarFrame::DualPolMetadata& dualpol_meta, bool auto_update_index) {
     std::string dir = base_path_ + "/" + station + "/" + timestamp + "/" + product;
     if (!ensure_directory_exists(dir)) return false;
     
@@ -203,7 +203,9 @@ bool FrameStorageManager::save_frame_bitmask(const std::string& station, const s
         total_disk_usage_ += (compressed.size() - old_size);
     }
     
-    update_index(station, product);
+    if (auto_update_index) {
+        update_index(station, product);
+    }
     return true;
 }
 
@@ -279,7 +281,7 @@ bool FrameStorageManager::load_volumetric_bitmask(const std::string& station, co
     return true;
 }
 
-bool FrameStorageManager::save_volumetric_bitmask(const std::string& station, const std::string& product, const std::string& timestamp, const std::vector<float>& tilts, uint16_t num_rays, uint16_t num_gates, float gate_spacing, float first_gate, const std::vector<uint8_t>& bitmask, const std::vector<uint8_t>& values, const RadarFrame::DualPolMetadata& dualpol_meta) {
+bool FrameStorageManager::save_volumetric_bitmask(const std::string& station, const std::string& product, const std::string& timestamp, const std::vector<float>& tilts, uint16_t num_rays, uint16_t num_gates, float gate_spacing, float first_gate, const std::vector<uint8_t>& bitmask, const std::vector<uint8_t>& values, const RadarFrame::DualPolMetadata& dualpol_meta, bool auto_update_index) {
     std::string dir = base_path_ + "/" + station + "/" + timestamp + "/" + product;
     if (!ensure_directory_exists(dir)) return false;
     
@@ -327,7 +329,9 @@ bool FrameStorageManager::save_volumetric_bitmask(const std::string& station, co
         total_disk_usage_ += (compressed.size() - old_size);
     }
     
-    update_index(station, product);
+    if (auto_update_index) {
+        update_index(station, product);
+    }
     return true;
 }
 
@@ -396,29 +400,32 @@ std::vector<FrameStorageManager::FrameMetadata> FrameStorageManager::scan_direct
     std::string station_dir = base_path_ + "/" + station;
     if (!fs::exists(station_dir)) return frames;
     
-    for (const auto& ts_entry : fs::directory_iterator(station_dir)) {
-        if (!ts_entry.is_directory()) continue;
-        std::string product_dir = ts_entry.path().string() + "/" + product;
-        if (!fs::exists(product_dir)) continue;
+    for (const auto& entry : fs::recursive_directory_iterator(station_dir)) {
+        if (!entry.is_regular_file()) continue;
+        if (entry.path().extension() != ".RDA") continue;
         
-        for (const auto& file_entry : fs::directory_iterator(product_dir)) {
-            if (!file_entry.is_regular_file()) continue;
-            std::string ext = file_entry.path().extension().string();
-            if (ext != ".RDA") continue;
-            
-            FrameMetadata meta;
-            meta.station = station;
-            meta.product = product;
-            meta.file_path = file_entry.path().string();
-            meta.file_size = fs::file_size(file_entry);
-            meta.timestamp = ts_entry.path().filename().string();
-            try {
-                meta.tilt = std::stof(file_entry.path().stem().string());
-            } catch (...) { meta.tilt = 0.0f; }
-            frames.push_back(meta);
-        }
+        // Path is base_path/station/timestamp/product/tilt.RDA
+        // We only want files for the requested product
+        if (entry.path().parent_path().filename().string() != product) continue;
+
+        FrameMetadata meta;
+        meta.station = station;
+        meta.product = product;
+        meta.file_path = entry.path().string();
+        meta.file_size = entry.file_size();
+        meta.timestamp = entry.path().parent_path().parent_path().filename().string();
+        try {
+            meta.tilt = std::stof(entry.path().stem().string());
+        } catch (...) { meta.tilt = 0.0f; }
+        frames.push_back(meta);
     }
-    std::sort(frames.begin(), frames.end(), [](const auto& a, const auto& b) { return a.timestamp > b.timestamp; });
+    // Only sort the frames if there are any
+    if (!frames.empty()) {
+        std::sort(frames.begin(), frames.end(), [](const auto& a, const auto& b) { 
+            if (a.timestamp != b.timestamp) return a.timestamp > b.timestamp;
+            return a.tilt < b.tilt;
+        });
+    }
     return frames;
 }
 

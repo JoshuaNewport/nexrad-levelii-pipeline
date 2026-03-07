@@ -81,7 +81,14 @@ std::vector<uint8_t>* BufferPool::acquire() {
 void BufferPool::release(std::vector<uint8_t>* buffer) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (buffer) {
-        buffer->clear();
+        // Optimization: Shrink if buffer grew significantly beyond initial reservation
+        // This reclaims memory after processing unusually large compressed frames
+        if (buffer->capacity() > buffer_size_ * 2) {
+            std::vector<uint8_t>().swap(*buffer);
+            buffer->reserve(buffer_size_);
+        } else {
+            buffer->clear();
+        }
     }
     available_.push(buffer);
     cv_.notify_one();
@@ -126,6 +133,7 @@ void BackgroundFrameFetcher::stop() {
     {
         std::lock_guard<std::mutex> lock(discovery_mutex_);
         discovery_cv_.notify_all();
+        discovery_full_cv_.notify_all();
     }
 
     if (discovery_loop_thread_.joinable()) {
@@ -208,7 +216,7 @@ void BackgroundFrameFetcher::reinitialize_pools() {
         old_fetch_pool = fetch_thread_pool_;
         old_disc_pool = discovery_thread_pool_;
         
-        fetch_thread_pool_ = std::make_shared<ThreadPool>(config_.fetcher_thread_pool_size);
+        fetch_thread_pool_ = std::make_shared<ThreadPool>(config_.fetcher_thread_pool_size, config_.max_task_queue_size);
         
         int disc_threads = config_.discovery_parallelism;
         const char* disc_env = std::getenv("NEXRAD_DISCOVERY_THREADS");
@@ -219,7 +227,7 @@ void BackgroundFrameFetcher::reinitialize_pools() {
             } catch (...) {}
         }
         
-        discovery_thread_pool_ = std::make_shared<ThreadPool>(disc_threads);
+        discovery_thread_pool_ = std::make_shared<ThreadPool>(disc_threads, config_.max_task_queue_size);
         buffer_pool_ = std::make_shared<BufferPool>(config_.buffer_pool_size, config_.buffer_size);
         
         this->log_info("Initialized pools: " + std::to_string(config_.fetcher_thread_pool_size) + 
@@ -335,6 +343,7 @@ void BackgroundFrameFetcher::fetch_loop() {
 
             batch = std::move(discovery_queue_.front());
             discovery_queue_.pop();
+            discovery_full_cv_.notify_one();
         }
 
         std::shared_ptr<ThreadPool> pool;
@@ -439,7 +448,7 @@ void BackgroundFrameFetcher::process_discovery_batch(const DiscoveryBatch& batch
         if (!decompressed_data.valid()) continue;
         decompressed_data->clear();
 
-        auto frames = parse_nexrad_level2_multi(*raw_data, item.station, item.timestamp, config.products, decompressed_data.get());
+        auto frames = parse_nexrad_level2_multi(*raw_data, item.station, item.timestamp, config.products, decompressed_data.get(), config.generate_3d);
         for (auto& pair : frames) {
             const std::string& product = pair.first;
             auto& frame = pair.second;
@@ -548,7 +557,7 @@ void BackgroundFrameFetcher::process_discovery_batch(const DiscoveryBatch& batch
                             }
                         }
 
-                        if (storage_->save_frame_bitmask(item.station, product, item.timestamp, tilt, num_rays, vol_num_gates, frame->gate_spacing_meters, frame->first_gate_meters, bitmask_2d, values_2d, frame->dualpol_meta)) {
+                        if (storage_->save_frame_bitmask(item.station, product, item.timestamp, tilt, num_rays, vol_num_gates, frame->gate_spacing_meters, frame->first_gate_meters, bitmask_2d, values_2d, frame->dualpol_meta, false)) {
                             frames_fetched_.fetch_add(1);
                             {
                                 std::lock_guard<std::mutex> lock(stats_mutex_);
@@ -576,7 +585,7 @@ void BackgroundFrameFetcher::process_discovery_batch(const DiscoveryBatch& batch
                         }
 
                         if (!vol_values.empty()) {
-                            storage_->save_volumetric_bitmask(item.station, product, item.timestamp, sorted_tilts, vol_num_rays, vol_num_gates, frame->gate_spacing_meters, frame->first_gate_meters, vol_bitmask, vol_values, frame->dualpol_meta);
+                            storage_->save_volumetric_bitmask(item.station, product, item.timestamp, sorted_tilts, vol_num_rays, vol_num_gates, frame->gate_spacing_meters, frame->first_gate_meters, vol_bitmask, vol_values, frame->dualpol_meta, false);
                         }
                     }
                 } catch (const std::exception& e) {
@@ -586,6 +595,11 @@ void BackgroundFrameFetcher::process_discovery_batch(const DiscoveryBatch& batch
                 }
         }
         last_fetch_timestamp_.store(std::chrono::system_clock::now().time_since_epoch().count());
+    }
+
+    // Update index once per batch after ALL items and ALL products are saved
+    for (const auto& product : config.products) {
+        storage_->update_index(batch.station, product);
     }
 }
 
@@ -710,8 +724,16 @@ void BackgroundFrameFetcher::fetch_frame_for_station(const std::string& station)
                 
                 // If batch gets too large, push it and start a new one to allow interleaving
                 if (batch.items.size() >= 5) {
-                    std::lock_guard<std::mutex> lock(discovery_mutex_);
-                    discovery_queue_.push(std::move(batch));
+                    {
+                        std::unique_lock<std::mutex> lock(discovery_mutex_);
+                        if (config_.max_discovery_queue_size > 0) {
+                            discovery_full_cv_.wait(lock, [this]() {
+                                return should_stop_.load() || discovery_queue_.size() < config_.max_discovery_queue_size;
+                            });
+                        }
+                        if (should_stop_.load()) break;
+                        discovery_queue_.push(std::move(batch));
+                    }
                     discovery_cv_.notify_one();
                     
                     batch = DiscoveryBatch();
@@ -721,9 +743,18 @@ void BackgroundFrameFetcher::fetch_frame_for_station(const std::string& station)
             new_last_key = key;
         }
 
-        if (!batch.items.empty()) {
-            std::lock_guard<std::mutex> lock(discovery_mutex_);
-            discovery_queue_.push(std::move(batch));
+        if (!batch.items.empty() && !should_stop_.load()) {
+            {
+                std::unique_lock<std::mutex> lock(discovery_mutex_);
+                if (config_.max_discovery_queue_size > 0) {
+                    discovery_full_cv_.wait(lock, [this]() {
+                        return should_stop_.load() || discovery_queue_.size() < config_.max_discovery_queue_size;
+                    });
+                }
+                if (!should_stop_.load()) {
+                    discovery_queue_.push(std::move(batch));
+                }
+            }
             discovery_cv_.notify_one();
         }
 

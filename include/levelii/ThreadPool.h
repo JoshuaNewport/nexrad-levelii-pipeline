@@ -24,7 +24,7 @@ class ThreadPool {
 public:
     using Task = std::function<void()>;
 
-    explicit ThreadPool(size_t worker_count = 0);
+    explicit ThreadPool(size_t worker_count = 0, size_t max_queue_size = 0);
 
     ~ThreadPool();
 
@@ -46,8 +46,10 @@ private:
     std::queue<Task> task_queue_;
     mutable std::mutex queue_mutex_;
     std::condition_variable queue_cv_;
+    std::condition_variable full_cv_;
     std::atomic<bool> stop_{false};
     std::atomic<size_t> active_threads_{0};
+    size_t max_queue_size_ = 0;
 
     void worker_loop();
 };

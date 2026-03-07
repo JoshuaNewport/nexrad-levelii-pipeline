@@ -16,13 +16,15 @@
  * @param station 4-letter station identifier (e.g., "KTLX").
  * @param timestamp ISO-formatted timestamp of the data collection.
  * @param product_type The specific data moment to extract (default: "reflectivity").
+ * @param generate_3d Whether to generate 3D volumetric data (default: true).
  * @return std::unique_ptr<RadarFrame> Structured frame containing sweeps and metadata, or nullptr on failure.
  */
 std::unique_ptr<RadarFrame> parse_nexrad_level2(
     const std::vector<uint8_t>& data,
     const std::string& station,
     const std::string& timestamp,
-    const std::string& product_type = "reflectivity"
+    const std::string& product_type = "reflectivity",
+    bool generate_3d = true
 );
 
 /**
@@ -35,6 +37,8 @@ std::unique_ptr<RadarFrame> parse_nexrad_level2(
  * @param station 4-letter station identifier (e.g., "KTLX").
  * @param timestamp ISO-formatted timestamp of the data collection.
  * @param product_types List of products to extract (e.g., {"reflectivity", "velocity"}).
+ * @param decompressed_buffer Optional pre-allocated buffer for decompression to reduce allocations.
+ * @param generate_3d Whether to generate 3D volumetric data for each frame (default: true).
  * @return std::unordered_map<std::string, std::unique_ptr<RadarFrame>> Map from product name to its frame.
  */
 std::unordered_map<std::string, std::unique_ptr<RadarFrame>> parse_nexrad_level2_multi(
@@ -42,5 +46,6 @@ std::unordered_map<std::string, std::unique_ptr<RadarFrame>> parse_nexrad_level2
     const std::string& station,
     const std::string& timestamp,
     const std::vector<std::string>& product_types,
-    std::vector<uint8_t>* decompressed_buffer = nullptr
+    std::vector<uint8_t>* decompressed_buffer = nullptr,
+    bool generate_3d = true
 );

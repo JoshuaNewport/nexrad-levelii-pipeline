@@ -42,7 +42,7 @@ int main(int argc, char** argv) {
     std::vector<uint8_t> sample_data((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
     file.close();
 
-    const int num_stations = 150;
+    const int num_stations = 50;
     const int frames_per_station = 1; // Process one frame per station for benchmark
     const int total_tasks = num_stations * frames_per_station;
     
@@ -66,48 +66,57 @@ int main(int argc, char** argv) {
               << config.fetcher_thread_pool_size << " threads..." << std::endl;
     std::cout << "Initial RSS: " << start_rss << " KB" << std::endl;
 
-    for (int i = 0; i < total_tasks; ++i) {
-        thread_pool->enqueue([&, i]() {
-            auto task_start = std::chrono::high_resolution_clock::now();
-            
-            std::string station = "ST" + std::to_string(i % num_stations);
-            std::string timestamp = "20260226_120000";
-            
-            ScopedBuffer raw_buf(buffer_pool);
-            if (raw_buf.valid()) {
-                raw_buf->assign(sample_data.begin(), sample_data.end());
-                
-                ScopedBuffer decomp_buf(buffer_pool);
-                if (decomp_buf.valid()) {
-                    auto frames = parse_nexrad_level2_multi(*raw_buf, station, timestamp, {"reflectivity"}, decomp_buf.get());
-                }
-            }
-            
-            auto task_end = std::chrono::high_resolution_clock::now();
-            total_parse_time_ms += std::chrono::duration_cast<std::chrono::milliseconds>(task_end - task_start).count();
-            completed_tasks++;
-            
-            if (completed_tasks % 10 == 0) {
-                std::cout << "\rProgress: " << completed_tasks << "/" << total_tasks << " tasks done..." << std::flush;
-            }
-        });
-    }
+    for (int run = 0; run < 2; ++run) {
+        std::cout << "\n--- Run " << run + 1 << " ---" << std::endl;
+        completed_tasks = 0;
+        total_parse_time_ms = 0;
+        size_t run_start_rss = get_rss();
 
-    // Wait for all tasks
-    while (completed_tasks < total_tasks) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        for (int i = 0; i < total_tasks; ++i) {
+            thread_pool->enqueue([&, i]() {
+                auto task_start = std::chrono::high_resolution_clock::now();
+                
+                std::string station = "ST" + std::to_string(i % num_stations);
+                std::string timestamp = "20260226_120000";
+                
+                ScopedBuffer raw_buf(buffer_pool);
+                if (raw_buf.valid()) {
+                    raw_buf->assign(sample_data.begin(), sample_data.end());
+                    
+                    ScopedBuffer decomp_buf(buffer_pool);
+                    if (decomp_buf.valid()) {
+                        auto frames = parse_nexrad_level2_multi(*raw_buf, station, timestamp, {"reflectivity"}, decomp_buf.get(), false);
+                        storage->update_index(station, "reflectivity");
+                    }
+                }
+                
+                auto task_end = std::chrono::high_resolution_clock::now();
+                total_parse_time_ms += std::chrono::duration_cast<std::chrono::milliseconds>(task_end - task_start).count();
+                completed_tasks++;
+                
+                if (completed_tasks % 10 == 0) {
+                    std::cout << "\rProgress: " << completed_tasks << "/" << total_tasks << " tasks done..." << std::flush;
+                }
+            });
+        }
+
+        // Wait for all tasks
+        while (completed_tasks < total_tasks) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+
+        size_t run_end_rss = get_rss();
+        std::cout << "\nRun " << run + 1 << " RSS Growth: " << (long long)run_end_rss - (long long)run_start_rss << " KB" << std::endl;
     }
 
     auto end_time = std::chrono::high_resolution_clock::now();
     size_t end_rss = get_rss();
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
 
-    std::cout << "\n\n=== Benchmark Results ===" << std::endl;
+    std::cout << "\n\n=== Final Results ===" << std::endl;
     std::cout << "Total Time: " << duration.count() << " ms" << std::endl;
-    std::cout << "Average Task Time: " << (double)total_parse_time_ms / total_tasks << " ms" << std::endl;
-    std::cout << "Throughput: " << (double)total_tasks / (duration.count() / 1000.0) << " tasks/sec" << std::endl;
     std::cout << "Final RSS: " << end_rss << " KB" << std::endl;
-    std::cout << "Memory Growth: " << (long long)end_rss - (long long)start_rss << " KB" << std::endl;
+    std::cout << "Total Memory Growth: " << (long long)end_rss - (long long)start_rss << " KB" << std::endl;
     std::cout << "=========================" << std::endl;
 
     thread_pool->shutdown();

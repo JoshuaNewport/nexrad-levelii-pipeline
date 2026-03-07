@@ -109,7 +109,8 @@ public:
         float first_gate,
         const std::vector<uint8_t>& bitmask,
         const std::vector<uint8_t>& values,
-        const RadarFrame::DualPolMetadata& dualpol_meta = {}
+        const RadarFrame::DualPolMetadata& dualpol_meta = {},
+        bool auto_update_index = true
     );
     
     /**
@@ -126,6 +127,7 @@ public:
      * @param bitmask Packed bitmask of valid data points.
      * @param values Vector of quantized data values.
      * @param dualpol_meta Dual-polarimetric metadata.
+     * @param auto_update_index If true, regenerates the product index immediately.
      * @return true if saved successfully.
      */
     bool save_volumetric_bitmask(
@@ -139,7 +141,8 @@ public:
         float first_gate,
         const std::vector<uint8_t>& bitmask,
         const std::vector<uint8_t>& values,
-        const RadarFrame::DualPolMetadata& dualpol_meta = {}
+        const RadarFrame::DualPolMetadata& dualpol_meta = {},
+        bool auto_update_index = true
     );
 
     /**

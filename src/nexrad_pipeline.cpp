@@ -54,6 +54,7 @@ int main(int argc, char* argv[]) {
     int cmd_buffer_size = -1;
     bool catchup_disabled = true;
     bool terminal_ui_enabled = isatty(STDOUT_FILENO);
+    std::string cmd_data_dir;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -65,6 +66,8 @@ int main(int argc, char* argv[]) {
             //terminal_ui_enabled = false;
         } else if (arg == "--threads" && i + 1 < argc) {
             cmd_threads = std::stoi(argv[++i]);
+        } else if (arg == "--data-dir" && i + 1 < argc) {
+            cmd_data_dir = argv[++i];
         } else if (arg == "--buffer-count" && i + 1 < argc) {
             cmd_buffer_count = std::stoi(argv[++i]);
         } else if (arg == "--buffer-size" && i + 1 < argc) {
@@ -76,6 +79,7 @@ int main(int argc, char* argv[]) {
                       << "  --catchup        Enables catch-up of historical frames on startup\n"
                       //<< "  --no-ui             Disable interactive terminal UI\n"
                       << "  --threads N         Number of worker threads\n"
+                      << "  --data-dir PATH     Directory where Level II data will be stored\n"
                       << "  --buffer-count N    Number of pre-allocated buffers\n"
                       << "  --buffer-size N     Size of each buffer in MB\n"
                       << "  --help              Show this help message\n";
@@ -96,7 +100,13 @@ int main(int argc, char* argv[]) {
     
     try {
         std::string base_dir = get_executable_directory();
-        std::string level2_data_path = base_dir + "/data/levelii";
+        std::string level2_data_path;
+
+        if (!cmd_data_dir.empty()) {
+            level2_data_path = cmd_data_dir + "/data/levelii";
+        } else {
+            level2_data_path = base_dir + "/data/levelii";
+        }
 
         std::cout << "📁 Data directory:" << std::endl;
         std::cout << "   Level II: " << level2_data_path << std::endl;

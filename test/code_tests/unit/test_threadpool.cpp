@@ -151,6 +151,45 @@ int main() {
         }
     }
 
+    // Test 6: Bounded queue (blocking enqueue)
+    {
+        log_info("\nTest 6: Bounded queue (blocking enqueue)");
+        size_t max_queue = 5;
+        ThreadPool pool(1, max_queue); // 1 worker, 5 queue slots
+        std::atomic<int> completed{0};
+        
+        // Fill the worker and the queue
+        for (int i = 0; i < 6; ++i) {
+            pool.enqueue([&completed]() {
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                completed.fetch_add(1);
+            });
+        }
+        
+        // The next enqueue should block until a task is completed
+        auto start = std::chrono::steady_clock::now();
+        pool.enqueue([&completed]() {
+            completed.fetch_add(1);
+        });
+        auto end = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+        
+        if (elapsed >= 40) { // Should have waited for at least one task (~50ms)
+            log_success("Test 6 passed: Bounded queue blocked for " + std::to_string(elapsed) + "ms");
+        } else {
+            log_error("Test 6 failed: Bounded queue did not block (elapsed " + std::to_string(elapsed) + "ms)");
+            return 1;
+        }
+        
+        pool.shutdown();
+        if (completed.load() == 7) {
+            log_success("Test 6 completed: All 7 tasks executed");
+        } else {
+            log_error("Test 6 failed: Only " + std::to_string(completed.load()) + " tasks executed");
+            return 1;
+        }
+    }
+
     log_info("\n=== All ThreadPool tests completed successfully ===");
     return 0;
 }

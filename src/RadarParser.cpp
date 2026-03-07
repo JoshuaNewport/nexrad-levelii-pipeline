@@ -74,7 +74,8 @@ public:
         const std::string& station_hint,
         const std::string& timestamp_hint,
         const std::vector<std::string>& product_types,
-        std::vector<uint8_t>* decompressed_out = nullptr
+        std::vector<uint8_t>* decompressed_out = nullptr,
+        bool generate_3d = true
     ) {
         auto parse_start = std::chrono::high_resolution_clock::now();
         std::unordered_map<std::string, std::unique_ptr<RadarFrame>> frames;
@@ -240,8 +241,11 @@ public:
                         RadarFrame::Sweep sweep;
                         sweep.index = current_sweep_idx;
                         sweep.elevation_deg = elevation;
-                        sweep.bins.reserve(60000 * 3);
-                        pair.second->sweeps.push_back(sweep);
+                        // Reserve reasonable initial capacity to reduce reallocations
+                        // Typical high-res sweep has ~720 radials * 1800 gates / 1 (DOWNSAMPLE)
+                        // but many gates are empty. 1M floats is ~4MB.
+                        sweep.bins.reserve(1000000); 
+                        pair.second->sweeps.push_back(std::move(sweep));
                     }
                 }
 
@@ -277,6 +281,9 @@ public:
                                     frame.gate_spacing_meters = gate_size_m * DOWNSAMPLE_GATES;
                                     frame.range_spacing_meters = gate_size_m * DOWNSAMPLE_GATES;
                                     frame.first_gate_meters = first_gate_m;
+                                }
+                                if (frame.sweeps[current_sweep_idx].bins.empty()) {
+                                    frame.sweeps[current_sweep_idx].bins.reserve(num_gates * 3);
                                 }
                                 for (uint16_t g = 0; g < num_gates; g += DOWNSAMPLE_GATES) {
                                     uint8_t raw_value = gate_data[g];
@@ -326,8 +333,9 @@ public:
                         sweep.index = current_sweep_idx;
                         sweep.elevation_num = elev_num;
                         sweep.elevation_deg = elevation;
-                        sweep.bins.reserve(60000 * 3);
-                        pair.second->sweeps.push_back(sweep);
+                        // Reserve reasonable initial capacity to reduce reallocations
+                        sweep.bins.reserve(1000000); 
+                        pair.second->sweeps.push_back(std::move(sweep));
                     }
                 }
 
@@ -413,6 +421,10 @@ public:
                                     f.first_gate_meters = fg; 
                                 }
                                 
+                                if (f.sweeps[current_sweep_idx].bins.empty()) {
+                                    f.sweeps[current_sweep_idx].bins.reserve(ng * 3);
+                                }
+                                
                                 for (uint16_t g = 0; g < ng; g += DOWNSAMPLE_GATES) {
                                     uint16_t raw = (ws == 16) ? read_be<uint16_t>(gdata + g * 2) : gdata[g];
                                     if (raw <= 1) continue;
@@ -448,10 +460,11 @@ public:
             else frame.elevation_deg = min_elevation;
             
             for (auto& sweep : frame.sweeps) sweep.bins.shrink_to_fit();
-            if (!frame.sweeps.empty()) {
+            if (generate_3d && !frame.sweeps.empty()) {
                 try { VolumetricGenerator::generate_volumetric_3d(frame); } catch (...) {}
             }
         }
+        segmenter.clear();
         return frames;
     }
 };
@@ -460,9 +473,10 @@ std::unique_ptr<RadarFrame> parse_nexrad_level2(
     const std::vector<uint8_t>& data,
     const std::string& station,
     const std::string& timestamp,
-    const std::string& product_type)
+    const std::string& product_type,
+    bool generate_3d)
 {
-    auto results = NEXRADParser::parse(data, station, timestamp, {product_type});
+    auto results = NEXRADParser::parse(data, station, timestamp, {product_type}, nullptr, generate_3d);
     auto it = results.find(product_type);
     if (it != results.end()) {
         return std::move(it->second);
@@ -475,7 +489,8 @@ std::unordered_map<std::string, std::unique_ptr<RadarFrame>> parse_nexrad_level2
     const std::string& station,
     const std::string& timestamp,
     const std::vector<std::string>& product_types,
-    std::vector<uint8_t>* decompressed_buffer)
+    std::vector<uint8_t>* decompressed_buffer,
+    bool generate_3d)
 {
-    return NEXRADParser::parse(data, station, timestamp, product_types, decompressed_buffer);
+    return NEXRADParser::parse(data, station, timestamp, product_types, decompressed_buffer, generate_3d);
 }

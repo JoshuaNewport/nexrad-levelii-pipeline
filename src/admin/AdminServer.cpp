@@ -23,7 +23,7 @@ void AdminServer::start() {
     if (is_running_) return;
 
     is_running_ = true;
-    web_server_ = std::make_unique<WebServer>("127.0.0.1", port_);
+    web_server_ = std::make_unique<WebServer>("0.0.0.0", port_);
     api_ = std::make_unique<AdminAPI>(fetcher_, storage_);
     
     api_->register_routes(*web_server_);

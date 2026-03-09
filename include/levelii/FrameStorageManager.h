@@ -183,7 +183,6 @@ public:
     
     // Cleanup operations
     void cleanup_old_frames(int max_frames_per_station = 30);
-    void cleanup_old_frames_by_age(int max_age_minutes = 1440);
     
     // Path utilities
     std::string get_frame_path(

@@ -149,20 +149,6 @@ std::string TerminalUI::format_size(uint64_t bytes) {
     return ss.str();
 }
 
-std::string TerminalUI::format_time(uint64_t timestamp_ns) {
-    if (timestamp_ns == 0) return "Never";
-    std::time_t t = static_cast<std::time_t>(timestamp_ns / 1000000000);
-    std::tm tm_res;
-    if (!gmtime_r(&t, &tm_res)) return "Error";
-    char buf[64];
-    std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S UTC", &tm_res);
-    return std::string(buf);
-}
-
-std::string TerminalUI::get_status_color(bool is_running) {
-    return is_running ? "\033[1;32m" : "\033[1;31m";
-}
-
 // Helper for shorter time display in table
 std::string TerminalUI::format_time_short(uint64_t timestamp_ns) {
     if (timestamp_ns == 0) return "N/A";

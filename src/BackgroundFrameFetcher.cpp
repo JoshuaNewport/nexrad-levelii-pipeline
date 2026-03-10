@@ -228,10 +228,22 @@ void BackgroundFrameFetcher::reinitialize_pools() {
         }
         
         discovery_thread_pool_ = std::make_shared<ThreadPool>(disc_threads, config_.max_task_queue_size);
-        buffer_pool_ = std::make_shared<BufferPool>(config_.buffer_pool_size, config_.buffer_size);
+        
+        // Ensure buffer pool is large enough for the number of threads to avoid deadlocks
+        // Each fetcher thread can hold up to 3 buffers at once during peak processing
+        int required_buffers = config_.fetcher_thread_pool_size * 4;
+        int actual_buffer_pool_size = std::max(config_.buffer_pool_size, required_buffers);
+        
+        if (actual_buffer_pool_size > config_.buffer_pool_size) {
+            this->log_info("Increasing buffer_pool_size from " + std::to_string(config_.buffer_pool_size) + 
+                     " to " + std::to_string(actual_buffer_pool_size) + " to maintain adequate thread ratio");
+        }
+
+        buffer_pool_ = std::make_shared<BufferPool>(actual_buffer_pool_size, config_.buffer_size);
         
         this->log_info("Initialized pools: " + std::to_string(config_.fetcher_thread_pool_size) + 
-                 " fetch threads, " + std::to_string(disc_threads) + " discovery threads");
+                 " fetch threads, " + std::to_string(disc_threads) + " discovery threads, " +
+                 std::to_string(actual_buffer_pool_size) + " buffers");
     }
 
     if (old_fetch_pool) old_fetch_pool->shutdown();
@@ -449,6 +461,11 @@ void BackgroundFrameFetcher::process_discovery_batch(const DiscoveryBatch& batch
         decompressed_data->clear();
 
         auto frames = parse_nexrad_level2_multi(*raw_data, item.station, item.timestamp, config.products, decompressed_data.get(), config.generate_3d);
+        
+        // Release buffers early to avoid deadlocks when processing many products
+        raw_data.reset();
+        decompressed_data.reset();
+
         for (auto& pair : frames) {
             const std::string& product = pair.first;
             auto& frame = pair.second;

@@ -72,6 +72,11 @@ target_include_directories(benchmark_memory_concurrency PRIVATE ${CMAKE_CURRENT_
 target_link_libraries(benchmark_memory_concurrency PRIVATE levelii_BackgroundFrameFetcher levelii_RadarParser levelii_FrameStorageManager)
 add_test(NAME integration_benchmark_memory_concurrency COMMAND benchmark_memory_concurrency ${CMAKE_CURRENT_SOURCE_DIR}/../test_files/KTLX20260209_162244_V06)
 
+add_executable(deadlock_simulation integration/deadlock_simulation.cpp)
+target_include_directories(deadlock_simulation PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../include)
+target_link_libraries(deadlock_simulation PRIVATE levelii_BackgroundFrameFetcher levelii_ThreadPool)
+add_test(NAME integration_deadlock_simulation COMMAND deadlock_simulation)
+
 # Fuzz tests
 add_executable(test_fuzz_corrupt_data fuzz/test_fuzz_corrupt_data.cpp)
 target_include_directories(test_fuzz_corrupt_data PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../include)

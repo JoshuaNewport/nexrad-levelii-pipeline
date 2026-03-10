@@ -92,6 +92,13 @@ public:
         }
     }
     
+    void reset() {
+        if (pool_ && buffer_) {
+            pool_->release(buffer_);
+            buffer_ = nullptr;
+        }
+    }
+    
     // Non-copyable
     ScopedBuffer(const ScopedBuffer&) = delete;
     ScopedBuffer& operator=(const ScopedBuffer&) = delete;
@@ -141,7 +148,7 @@ struct FrameFetcherConfig {
 
     // Memory and Performance Scaling
     int fetcher_thread_pool_size = 8;      // Increase to 8 for 150 stations
-    int buffer_pool_size = 32;            // More buffers for parallelism
+    int buffer_pool_size = 64;            // More buffers for parallelism
     size_t buffer_size = 64 * 1024 * 1024; // 64MB per buffer (for decompressed data)
     int max_task_queue_size = 1000;       // Bound task queue to prevent memory spikes
     

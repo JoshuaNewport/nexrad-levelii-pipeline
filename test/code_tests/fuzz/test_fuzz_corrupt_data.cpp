@@ -83,6 +83,49 @@ void test_integer_overflow_block_count() {
     std::cout << "✓ Integer overflow on block count handled safely" << std::endl;
 }
 
+template<typename T>
+void write_be_val(uint8_t* data, T value) {
+    if constexpr (sizeof(T) == 2) {
+        uint16_t val = __builtin_bswap16(static_cast<uint16_t>(value));
+        std::memcpy(data, &val, 2);
+    } else if constexpr (sizeof(T) == 4) {
+        uint32_t val = __builtin_bswap32(static_cast<uint32_t>(value));
+        std::memcpy(data, &val, 4);
+    }
+}
+
+void test_m31_block_pointers_out_of_payload() {
+    std::cout << "Test: M31 block pointers exceeding payload size..." << std::endl;
+    
+    std::vector<uint8_t> data(1024, 0);
+    create_minimal_valid_header(data);
+    
+    size_t msg_offset = sizeof(nexrad::VolumeHeader);
+    
+    nexrad::MessageHeader msg_header;
+    std::memset(&msg_header, 0, sizeof(msg_header));
+    // Size is in halfwords. Header (16) + Message31Header (36) = 52 bytes = 26 halfwords.
+    write_be_val<uint16_t>(reinterpret_cast<uint8_t*>(&msg_header.size), 26);
+    msg_header.type = 31;
+    write_be_val<uint16_t>(reinterpret_cast<uint8_t*>(&msg_header.julian_date), 30000);
+    
+    std::memcpy(data.data() + msg_offset, &msg_header, sizeof(nexrad::MessageHeader));
+    
+    nexrad::Message31Header m31;
+    std::memset(&m31, 0, sizeof(m31));
+    write_be_val<uint16_t>(reinterpret_cast<uint8_t*>(&m31.block_count), 10); // 10 blocks!
+    
+    std::memcpy(data.data() + msg_offset + sizeof(nexrad::MessageHeader), &m31, sizeof(m31));
+    
+    // The payload size for Message 31 will be 36 bytes (sizeof(Message31Header)).
+    // required_m31_size = 36 + (10 - 1) * 4 = 72 bytes.
+    // 36 < 72, so it should be caught by the new check.
+
+    auto frames = parse_nexrad_level2_multi(data, "TEST", "20260000_000000", {"reflectivity"});
+    
+    std::cout << "✓ M31 block pointers exceeding payload size handled safely" << std::endl;
+}
+
 void test_null_buffer_pointer() {
     std::cout << "Test: Null buffer pointer in safe_read_struct..." << std::endl;
     
@@ -154,6 +197,7 @@ int main() {
         test_invalid_block_pointer_out_of_range();
         test_buffer_with_invalid_message_header();
         test_integer_overflow_block_count();
+        test_m31_block_pointers_out_of_payload();
         test_null_buffer_pointer();
         test_offset_beyond_buffer();
         test_pointer_dereference_overflow();

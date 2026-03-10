@@ -311,7 +311,13 @@ public:
                 const nexrad::Message31Header* m31 = *m31_opt;
                 
                 uint16_t block_count = read_be<uint16_t>(reinterpret_cast<const uint8_t*>(&m31->block_count));
-                if (block_count > 100) { message_count++; continue; }
+                if (block_count == 0 || block_count > 100) { message_count++; continue; }
+
+                // Bounds check for variable-length block_pointers array
+                if (payload_size < sizeof(nexrad::Message31Header) + (block_count - 1) * sizeof(uint32_t)) {
+                    message_count++;
+                    continue;
+                }
 
                 float azimuth = read_be_float(reinterpret_cast<const uint8_t*>(&m31->azimuth_angle));
                 float elevation = read_be_float(reinterpret_cast<const uint8_t*>(&m31->elev_angle));

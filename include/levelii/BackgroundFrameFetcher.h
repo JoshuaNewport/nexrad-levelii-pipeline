@@ -70,12 +70,35 @@ public:
     std::vector<uint8_t>* acquire();
     void release(std::vector<uint8_t>* buffer);
 
+    /**
+     * @brief Shut down the buffer pool.
+     * 
+     * Wakes up all waiting threads. Subsequent calls to acquire() will return nullptr.
+     */
+    void shutdown();
+
+    /**
+     * @brief Check if the buffer pool has been shut down.
+     */
+    bool is_shutdown() const { return stop_; }
+
+    /**
+     * @brief Get statistics for the buffer pool.
+     */
+    size_t total_buffers() const { return buffers_.size(); }
+    size_t available_buffers() const {
+        std::lock_guard<std::mutex> lock(const_cast<std::mutex&>(mutex_));
+        return available_.size();
+    }
+    size_t buffer_size() const { return buffer_size_; }
+
 private:
     size_t buffer_size_;
     std::vector<std::unique_ptr<std::vector<uint8_t>>> buffers_;
     std::queue<std::vector<uint8_t>*> available_;
     std::mutex mutex_;
     std::condition_variable cv_;
+    bool stop_{false};
 };
 
 /**
@@ -179,11 +202,22 @@ public:
     std::set<std::string> get_monitored_stations() const;
     void set_logging_enabled(bool enabled) { logging_enabled_.store(enabled); }
 
-    // Dynamic Reconfiguration
+    /**
+     * @brief Update the fetcher's configuration at runtime.
+     * 
+     * Safely re-initializes thread and buffer pools if configuration changes.
+     * Guaranteed to be thread-safe with respect to ongoing discovery and fetching.
+     * 
+     * @param new_config The new configuration.
+     */
     void reconfigure(const FrameFetcherConfig& new_config);
     FrameFetcherConfig get_config() const;
 
-    // Statistics
+    /**
+     * @brief Retrieve detailed system metrics and station statistics.
+     * 
+     * @return json JSON-formatted statistics.
+     */
     json get_statistics() const;
 
 private:
